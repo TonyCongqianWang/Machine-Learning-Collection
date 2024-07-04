@@ -1,4 +1,4 @@
-import torch
+import torch, wandb
 from dataset import FacialKeypointDataset
 from torch import nn, optim
 import os
@@ -13,12 +13,11 @@ from utils import (
     get_submission
 )
 
-
-def train_one_epoch(loader, model, optimizer, loss_fn, scaler, device):
+def train_one_epoch(loader, model, optimizer, loss_fn, device):
     losses = []
     loop = tqdm(loader)
     num_examples = 0
-    for batch_idx, (data, targets) in enumerate(loop):
+    for _, (data, targets) in enumerate(loop):
         data = data.to(device=device)
         targets = targets.to(device=device)
 
@@ -34,12 +33,19 @@ def train_one_epoch(loader, model, optimizer, loss_fn, scaler, device):
         loss.backward()
         optimizer.step()
 
-    print(f"Loss average over epoch: {(sum(losses)/num_examples)**0.5}")
-
+    loss_mse= (sum(losses)/num_examples)**0.5
+    return loss_mse
 
 def main():
+    wandb.init(
+        project="keypoints",
+        config={
+            "initial_lr" :config.LEARNING_RATE,
+        }
+    )
+    
     train_ds = FacialKeypointDataset(
-        csv_file="data/train_4.csv",
+        data="data/train_4.csv",
         transform=config.train_transforms,
     )
     train_loader = DataLoader(
@@ -51,7 +57,7 @@ def main():
     )
     val_ds = FacialKeypointDataset(
         transform=config.val_transforms,
-        csv_file="data/val_4.csv",
+        data="data/val_4.csv",
     )
     val_loader = DataLoader(
         val_ds,
@@ -61,43 +67,27 @@ def main():
         shuffle=False,
     )
 
-    test_ds = FacialKeypointDataset(
-        csv_file="data/test.csv",
-        transform=config.val_transforms,
-        train=False,
-    )
-
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=1,
-        num_workers=config.NUM_WORKERS,
-        pin_memory=config.PIN_MEMORY,
-        shuffle=False,
-    )
     loss_fn = nn.MSELoss(reduction="sum")
     model = EfficientNet.from_pretrained("efficientnet-b0")
-    model._fc = nn.Linear(1280, 30)
+    model._fc = nn.Linear(1280, 12)
     model = model.to(config.DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
-    scaler = torch.cuda.amp.GradScaler()
-
-    model_4 = EfficientNet.from_pretrained("efficientnet-b0")
-    model_4._fc = nn.Linear(1280, 30)
-    model_15 = EfficientNet.from_pretrained("efficientnet-b0")
-    model_15._fc = nn.Linear(1280, 30)
-    model_4 = model_4.to(config.DEVICE)
-    model_15 = model_15.to(config.DEVICE)
 
     if config.LOAD_MODEL and config.CHECKPOINT_FILE in os.listdir():
         load_checkpoint(torch.load(config.CHECKPOINT_FILE), model, optimizer, config.LEARNING_RATE)
-        load_checkpoint(torch.load("b0_4.pth.tar"), model_4, optimizer, config.LEARNING_RATE)
-        load_checkpoint(torch.load("b0_15.pth.tar"), model_15, optimizer, config.LEARNING_RATE)
 
-    get_submission(test_loader, test_ds, model_15, model_4)
+    if config.SUBMISSION_MODEL and config.SUBMISSION_MODEL in os.listdir():
+        model_sub = EfficientNet.from_pretrained("efficientnet-b0")
+        model_sub._fc = nn.Linear(1280, 12)
+        model_sub = model_sub.to(config.DEVICE)
+        load_checkpoint(torch.load(config.CHECKPOINT_FILE), model_sub, optimizer, config.LEARNING_RATE)
+        get_submission("data/test.csv", model_sub)
 
     for epoch in range(config.NUM_EPOCHS):
+        print(f"Train epoch: {epoch}")
         get_rmse(val_loader, model, loss_fn, config.DEVICE)
-        train_one_epoch(train_loader, model, optimizer, loss_fn, scaler, config.DEVICE)
+        loss_mse = train_one_epoch(train_loader, model, optimizer, loss_fn, config.DEVICE)
+        print(f"Train loss average: {loss_mse}")
 
         # get on validation
         if config.SAVE_MODEL:
@@ -105,7 +95,11 @@ def main():
                 "state_dict": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
             }
+            loss_mse = get_rmse(train_loader, model, optimizer, loss_fn, config.DEVICE)
             save_checkpoint(checkpoint, filename=config.CHECKPOINT_FILE)
+            save_checkpoint(checkpoint, filename=config.CHECKPOINT_FILE + f"_{epoch}_{loss_mse}.pth.tar")
+            wandb.log({"loss": loss_mse})
+            print(f"Valdation loss: {loss_mse}")
 
 if __name__ == "__main__":
     main()

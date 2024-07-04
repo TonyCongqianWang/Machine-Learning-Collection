@@ -6,12 +6,14 @@ from torch.utils.data import DataLoader, Dataset
 
 
 class FacialKeypointDataset(Dataset):
-    def __init__(self, csv_file, train=True, transform=None):
+    def __init__(self, data, train=True, transform=None):
         super().__init__()
-        self.data = pd.read_csv(csv_file)
-        self.category_names = ['left_eye_center_x', 'left_eye_center_y', 'right_eye_center_x', 'right_eye_center_y', 'left_eye_inner_corner_x', 'left_eye_inner_corner_y', 'left_eye_outer_corner_x', 'left_eye_outer_corner_y', 'right_eye_inner_corner_x', 'right_eye_inner_corner_y', 'right_eye_outer_corner_x', 'right_eye_outer_corner_y', 'left_eyebrow_inner_end_x', 'left_eyebrow_inner_end_y', 'left_eyebrow_outer_end_x', 'left_eyebrow_outer_end_y', 'right_eyebrow_inner_end_x', 'right_eyebrow_inner_end_y', 'right_eyebrow_outer_end_x', 'right_eyebrow_outer_end_y', 'nose_tip_x', 'nose_tip_y', 'mouth_left_corner_x', 'mouth_left_corner_y', 'mouth_right_corner_x', 'mouth_right_corner_y', 'mouth_center_top_lip_x', 'mouth_center_top_lip_y', 'mouth_center_bottom_lip_x', 'mouth_center_bottom_lip_y']
+        self.category_names = ["0_x","0_y", "1_x", "1_y", "2_x", "2_y", "3_x", "3_y", "4_x", "4_y", "5_x", "5_y"]
         self.transform = transform
         self.train = train
+        if isinstance(data, str):
+            data = pd.read_csv(data)
+        self.data = data
 
     def __len__(self):
         return self.data.shape[0]
@@ -26,10 +28,10 @@ class FacialKeypointDataset(Dataset):
             labels = np.zeros(30)
 
         ignore_indices = labels == -1
-        labels = labels.reshape(15, 2)
+        labels = labels.reshape(6, 2)
 
         if self.transform:
-            image = np.repeat(image.reshape(96, 96, 1), 3, 2).astype(np.uint8)
+            image = np.repeat(image.reshape(96, 84, 1), 3, 2).astype(np.uint8)
             augmentations = self.transform(image=image, keypoints=labels)
             image = augmentations["image"]
             labels = augmentations["keypoints"]
@@ -41,7 +43,9 @@ class FacialKeypointDataset(Dataset):
 
 
 if __name__ == "__main__":
-    ds = FacialKeypointDataset(csv_file="data/train_4.csv", train=True, transform=config.train_transforms)
+    data = pd.read_csv("data/train_4.csv")
+
+    ds = FacialKeypointDataset(data=data, train=True, transform=config.train_transforms)
     loader = DataLoader(ds, batch_size=1, shuffle=True, num_workers=0)
 
     for idx, (x, y) in enumerate(loader):

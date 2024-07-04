@@ -3,37 +3,46 @@ import numpy as np
 import config
 import pandas as pd
 from tqdm import tqdm
+from dataset import FacialKeypointDataset
+from torch.utils.data import DataLoader
 
 
-def get_submission(loader, dataset, model_15, model_4):
+def get_submission(dataset_path, model_4):
     """
     This can be done a lot faster.. but it didn't take
     too much time to do it in this inefficient way
     """
-    model_15.eval()
+    data = pd.read_csv(dataset_path)
+    
+    test_ds = FacialKeypointDataset(
+        data=data,
+        transform=config.val_transforms,
+        train=False,
+    )
+
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=1,
+        num_workers=config.NUM_WORKERS,
+        pin_memory=config.PIN_MEMORY,
+        shuffle=False,
+    )
+
     model_4.eval()
-    id_lookup = pd.read_csv("data/IdLookupTable.csv")
-    predictions = []
-    image_id = 1
+    category_names = test_ds.category_names
 
-    for image, label in tqdm(loader):
+    imageIds = {"ImageId" : data["ImageId"]}
+    predictions = {cat_name : [] for cat_name in category_names}
+
+    for image in tqdm(test_loader):
         image = image.to(config.DEVICE)
-        preds_15 = torch.clip(model_15(image).squeeze(0), 0.0, 96.0)
-        preds_4 = torch.clip(model_4(image).squeeze(0), 0.0, 96.0)
-        feature_names = id_lookup.loc[id_lookup["ImageId"] == image_id]["FeatureName"]
+        preds_4 = model_4(image).squeeze(0)
 
-        for feature_name in feature_names:
-            feature_index = dataset.category_names.index(feature_name)
-            if feature_names.shape[0] < 10:
-                predictions.append(preds_4[feature_index].item())
-            else:
-                predictions.append(preds_15[feature_index].item())
-
-        image_id += 1
-
-    df = pd.DataFrame({"RowId": np.arange(1, len(predictions)+1), "Location": predictions})
-    df.to_csv("submission.csv", index=False)
-    model_15.train()
+        for cat_idx, cat_name in enumerate(category_names):
+            predictions[cat_name].append(preds_4[cat_idx].item())
+            
+    df = pd.DataFrame({**imageIds, **predictions})
+    df.to_csv("data/submission.csv", index=True)
     model_4.train()
 
 
@@ -52,8 +61,7 @@ def get_rmse(loader, model, loss_fn, device):
         losses.append(loss.item())
 
     model.train()
-    print(f"Loss on val: {(sum(losses)/num_examples)**0.5}")
-
+    return (sum(losses)/num_examples)**0.5
 
 def save_checkpoint(state, filename="my_checkpoint.pth.tar"):
     print("=> Saving checkpoint")
