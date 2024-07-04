@@ -24,7 +24,7 @@ class FacialKeypointDataset(Dataset):
             labels = np.array(self.data.iloc[index, :12].tolist())
             labels[np.isnan(labels)] = -1
         else:
-            image = np.array(self.data.iloc[index, 1:].split()).astype(np.float32)
+            image = np.array(self.data.iloc[index, 1].split()).astype(np.float32)
             labels = np.zeros(12)
 
         ignore_indices = labels == -1
