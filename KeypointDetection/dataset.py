@@ -20,12 +20,12 @@ class FacialKeypointDataset(Dataset):
 
     def __getitem__(self, index):
         if self.train:
-            image = np.array(self.data.iloc[index, 30].split()).astype(np.float32)
-            labels = np.array(self.data.iloc[index, :30].tolist())
+            image = np.array(self.data.iloc[index, 12].split()).astype(np.float32)
+            labels = np.array(self.data.iloc[index, :12].tolist())
             labels[np.isnan(labels)] = -1
         else:
-            image = np.array(self.data.iloc[index, 1].split()).astype(np.float32)
-            labels = np.zeros(30)
+            image = np.array(self.data.iloc[index, 1:].split()).astype(np.float32)
+            labels = np.zeros(12)
 
         ignore_indices = labels == -1
         labels = labels.reshape(6, 2)
