@@ -95,7 +95,7 @@ def main():
                 "state_dict": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
             }
-            loss_mse = get_rmse(train_loader, model, optimizer, loss_fn, config.DEVICE)
+            loss_mse = get_rmse(train_loader, model, loss_fn, config.DEVICE)
             save_checkpoint(checkpoint, filename=config.CHECKPOINT_FILE)
             save_checkpoint(checkpoint, filename=config.CHECKPOINT_FILE + f"_{epoch}_{loss_mse}.pth.tar")
             wandb.log({"loss": loss_mse})

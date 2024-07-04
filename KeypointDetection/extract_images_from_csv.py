@@ -7,11 +7,11 @@ def extract_images_from_csv(csv, column, save_folder, width=84, height=96):
     if not os.path.exists(save_folder):
         os.makedirs(save_folder)
 
-    for idx, image in enumerate(csv[column]):
+    for idx, image in enumerate(csv[column][:20]):
         image = np.array(image.split()).astype(np.uint8)
         image = image.reshape(height, width)
         cv2.imwrite(save_folder+f"img_{idx}.png", image)
 
 
-csv = pd.read_csv("test.csv")
+csv = pd.read_csv("data/train_4.csv")
 extract_images_from_csv(csv, "Image", "data/test/")

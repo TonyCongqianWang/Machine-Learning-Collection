@@ -20,7 +20,10 @@ train_transforms = A.Compose(
     [
         A.Resize(width=84, height=96),
         A.Rotate(limit=15, border_mode=cv2.BORDER_CONSTANT, p=0.5),
-        A.IAAAffine(shear=15, scale=1.0, mode="constant", p=0.2),
+        A.OneOf([
+            A.Perspective(scale=(0.02, 0.05), keep_size=True),
+            A.Affine(shear=(-15, 15), mode=0),
+        ], p=0.2),
         A.OneOf([
             A.GaussNoise(p=0.8),
             A.CLAHE(p=0.8),
