@@ -9,11 +9,9 @@ WEIGHT_DECAY = 5e-4
 BATCH_SIZE = 64
 NUM_EPOCHS = 100
 NUM_WORKERS = 4
-CHECKPOINT_FILE = "b0_4.pth.tar"
 SUBMISSION_MODEL = None
 PIN_MEMORY = True
 SAVE_MODEL = True
-LOAD_MODEL = True
 
 # Data augmentation for images
 train_transforms = A.Compose(

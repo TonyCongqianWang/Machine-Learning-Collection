@@ -1,4 +1,4 @@
-import torch, wandb
+import torch, wandb, argparse
 from dataset import FacialKeypointDataset
 from torch import nn, optim
 import os
@@ -37,6 +37,18 @@ def train_one_epoch(loader, model, optimizer, loss_fn, device):
     return loss_mse
 
 def main():
+    
+    parser = argparse.ArgumentParser(
+    description='convert image dataset to csv format')
+
+    parser.add_argument("dataset", type=str,
+                    help='name of dataset located in data/')
+    parser.add_argument("--resume", default=True,
+                    help='name of dataset located in data/')
+    args = parser.parse_args()
+    
+    CHECKPOINT_FILE = f"models/checkpoints/checkpoint_{args.dataset}.pth.tar"
+
     wandb.init(
         project="keypoints",
         config={
@@ -45,7 +57,7 @@ def main():
     )
     
     train_ds = FacialKeypointDataset(
-        data="data/train_4.csv",
+        data=f"data/{args.dataset}_train.csv",
         transform=config.train_transforms,
     )
     train_loader = DataLoader(
@@ -57,7 +69,7 @@ def main():
     )
     val_ds = FacialKeypointDataset(
         transform=config.val_transforms,
-        data="data/val_4.csv",
+        data=f"data/{args.dataset}_val.csv",
     )
     val_loader = DataLoader(
         val_ds,
@@ -73,14 +85,14 @@ def main():
     model = model.to(config.DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
 
-    if config.LOAD_MODEL and config.CHECKPOINT_FILE in os.listdir():
-        load_checkpoint(torch.load(config.CHECKPOINT_FILE), model, optimizer, config.LEARNING_RATE)
+    if args.resume and CHECKPOINT_FILE in os.listdir():
+        load_checkpoint(torch.load(CHECKPOINT_FILE), model, optimizer, config.LEARNING_RATE)
 
     if config.SUBMISSION_MODEL and config.SUBMISSION_MODEL in os.listdir():
         model_sub = EfficientNet.from_pretrained("efficientnet-b0")
         model_sub._fc = nn.Linear(1280, 12)
         model_sub = model_sub.to(config.DEVICE)
-        load_checkpoint(torch.load(config.CHECKPOINT_FILE), model_sub, optimizer, config.LEARNING_RATE)
+        load_checkpoint(torch.load(CHECKPOINT_FILE), model_sub, optimizer, config.LEARNING_RATE)
         get_submission("data/test.csv", model_sub)
 
     for epoch in range(config.NUM_EPOCHS):
@@ -96,8 +108,8 @@ def main():
                 "optimizer": optimizer.state_dict(),
             }
             loss_mse = get_rmse(train_loader, model, loss_fn, config.DEVICE)
-            save_checkpoint(checkpoint, filename=config.CHECKPOINT_FILE)
-            save_checkpoint(checkpoint, filename=config.CHECKPOINT_FILE + f"_{epoch}_{loss_mse}.pth.tar")
+            save_checkpoint(checkpoint, filename=CHECKPOINT_FILE)
+            save_checkpoint(checkpoint, filename=CHECKPOINT_FILE + f"_{args.dataset}_{epoch}_{loss_mse}.pth.tar")
             wandb.log({"loss": loss_mse})
             print(f"Valdation loss: {loss_mse}")
 
