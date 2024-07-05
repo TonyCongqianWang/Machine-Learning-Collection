@@ -1,9 +1,7 @@
 r"""PyTorch Detection Training.
 
 To run in a multi-gpu environment, use the distributed launcher::
-
-    python -m torch.distributed.launch --nproc_per_node=$NGPU --use_env \
-        train.py ... --world-size $NGPU
+    torchrun --nproc_per_node 2 train.py --world-size 2
 
 The default hyperparameters are tuned for training on 8 gpus and 2 images per gpu.
     --lr 0.02 --batch-size 2 --world-size 8
@@ -53,7 +51,7 @@ def get_custom_model(**kwargs):
     
 def get_dataset_coco(is_train, args):
     image_set = "train" if is_train else "val"
-    num_classes, mode = {"coco": (91, "instances"), "coco_kp": (2, "person_keypoints")}[args.dataset]
+    num_classes, mode = {"coco": (91, "instances"), "coco_kp": (2, "person_keypoints"), "coco_custom": (args.num_classes, "custom")}[args.dataset]
     with_masks = "mask" in args.model
     ds = get_coco(
         root=args.data_path,
@@ -87,7 +85,7 @@ def get_args_parser(add_help=True):
 
     parser = argparse.ArgumentParser(description="PyTorch Detection Training", add_help=add_help)
 
-    parser.add_argument("--data-path", default="/datasets01/COCO/022719/", type=str, help="dataset path")
+    parser.add_argument("--data-path", default="/data/COCO/myProject/", type=str, help="dataset path")
     parser.add_argument(
         "--dataset",
         default="cvat",
@@ -177,7 +175,7 @@ def get_args_parser(add_help=True):
     )
 
     # distributed training parameters
-    parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
+    parser.add_argument("--world-size", default=2, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
     parser.add_argument("--weights", default="DEFAULT", type=str, help="the weights enum name to load")
     parser.add_argument("--weights-backbone", default="DEFAULT", type=str, help="the backbone weights enum name to load")
@@ -191,8 +189,8 @@ def get_args_parser(add_help=True):
 
 
 def main(args):
-    if args.dataset not in ("coco", "cvat"):
-        raise ValueError(f"Dataset should be coco or cvat, got {args.dataset}")
+    if args.dataset not in ("coco", "coco_kp" "cvat"):
+        raise ValueError(f"Dataset should be coco, coco_kp or cvat, got {args.dataset}")
 
     if args.output_dir:
         utils.mkdir(args.output_dir)
