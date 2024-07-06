@@ -15,6 +15,7 @@ Also, if you train Keypoint R-CNN, the default hyperparameters are
 Because the number of images is smaller in the person keypoint subset of COCO,
 the number of epochs should be adapted so that we have the same number of iterations.
 """
+from ast import arg
 import datetime
 import os
 import time
@@ -25,7 +26,7 @@ import torch.utils.data
 import torchvision
 import torchvision.models.detection
 import torchvision.models.detection.mask_rcnn
-import utils
+import utils, wandb
 from coco_utils import get_coco
 from cvat_utils import get_cvat
 from engine import evaluate, train_one_epoch
@@ -33,7 +34,7 @@ from group_by_aspect_ratio import create_aspect_ratio_groups, GroupedBatchSample
 
 
 def get_dataset(is_train, args):
-    if args.dataset == "coco":
+    if "coco" in args.dataset:
         return get_dataset_coco(is_train, args)
     if args.dataset == "cvat":
         return get_dataset_cvat(is_train, args)
@@ -51,14 +52,19 @@ def get_custom_model(**kwargs):
     
 def get_dataset_coco(is_train, args):
     image_set = "train" if is_train else "val"
-    num_classes, mode = {"coco": (91, "instances"), "coco_kp": (2, "person_keypoints"), "coco_custom": (args.num_classes, "custom")}[args.dataset]
+    if args.dataset.startswith("coco_custom_"):
+        num_classes = int(args.dataset.split("_")[-1])
+        mode = "_".join(args.dataset.split("_")[1:-1])
+    else:
+        num_classes, mode = {"coco": (91, "instances"), "coco_kp": (2, "person_keypoints")}[args.dataset]
     with_masks = "mask" in args.model
     ds = get_coco(
         root=args.data_path,
         image_set=image_set,
         transforms=get_transform(is_train, args),
         mode=mode,
-        with_masks=with_masks,
+        cat_id_map=args.cat_id_map,
+        with_masks=with_masks
     )
     return ds, num_classes
 
@@ -76,7 +82,6 @@ def get_transform(is_train, args):
     else:
         return presets.DetectionPresetEval(
             backend=args.backend,
-            hflip_prob= 0.5 if args.enable_hflip else 0
         )
 
 
@@ -85,26 +90,32 @@ def get_args_parser(add_help=True):
 
     parser = argparse.ArgumentParser(description="PyTorch Detection Training", add_help=add_help)
 
-    parser.add_argument("--data-path", default="/data/COCO/myProject/", type=str, help="dataset path")
+    parser.add_argument("--data-path", default="data/COCO/myProject/", type=str, help="dataset path")
     parser.add_argument(
         "--dataset",
-        default="cvat",
+        default="coco_custom_person_keypoints_2",
         type=str,
-        help="dataset name. Use coco for object detection and instance segmentation and coco_kp for Keypoint detection",
+        help="name of dataset type. Only detection of boxes supported",
     )
-    parser.add_argument("--model", default="maskrcnn_resnet50_fpn", type=str, help="model name")
+    parser.add_argument(
+        "--cat-id-map",
+        default='{}',
+        type=str,
+        help="dictionary mapping category_id to index. Must use double quotes for category_id. None for identity. Empty dict to map very category_id to 1",
+    )
+    parser.add_argument("--model", default="fasterrcnn_resnet50_fpn", type=str, help="model name")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
     parser.add_argument(
-        "-b", "--batch-size", default=10, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
+        "-b", "--batch-size", default=2, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
     )
-    parser.add_argument("--epochs", default=80, type=int, metavar="N", help="number of total epochs to run")
+    parser.add_argument("--epochs", default=50, type=int, metavar="N", help="number of total epochs to run")
     parser.add_argument(
-        "-j", "--workers", default=2, type=int, metavar="N", help="number of data loading workers (default: 4)"
+        "-j", "--workers", default=4, type=int, metavar="N", help="number of data loading workers (default: 4)"
     )
     parser.add_argument("--opt", default="sgd", type=str, help="optimizer")
     parser.add_argument(
         "--lr",
-        default=0.005,
+        default=0.002,
         type=float,
         help="initial learning rate, 0.02 is the default value for training on 8 gpus and 2 images_per_gpu",
     )
@@ -128,11 +139,8 @@ def get_args_parser(add_help=True):
         "--lr-scheduler", default="multisteplr", type=str, help="name of lr scheduler (default: multisteplr)"
     )
     parser.add_argument(
-        "--lr-step-size", default=8, type=int, help="decrease lr every step-size epochs (multisteplr scheduler only)"
-    )
-    parser.add_argument(
         "--lr-steps",
-        default=[50, 65],
+        default=[30, 40],
         nargs="+",
         type=int,
         help="decrease lr every step-size epochs (multisteplr scheduler only)",
@@ -140,7 +148,8 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma (multisteplr scheduler only)"
     )
-    parser.add_argument("--print-freq", default=20, type=int, help="print frequency")
+    parser.add_argument("--print-freq", default=100, type=int, help="print frequency")
+    parser.add_argument("--eval-freq", default=5, type=int, help="eval frequency")
     parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
     parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
     parser.add_argument("--start_epoch", default=0, type=int, help="start epoch")
@@ -150,7 +159,7 @@ def get_args_parser(add_help=True):
         "--trainable-backbone-layers", default=None, type=int, help="number of trainable layers of backbone"
     )
     parser.add_argument(
-        "--data-augmentation", default="custom", type=str, help="data augmentation policy (default: custom)"
+        "--data-augmentation", default="ssd", type=str, help="data augmentation policy (default: ssd)"
     )
     parser.add_argument(
         "--sync-bn",
@@ -183,14 +192,14 @@ def get_args_parser(add_help=True):
     # Mixed precision training parameters
     parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
 
-    parser.add_argument("--backend", default="tensor", type=str.lower, help="PIL or tensor - case insensitive")
+    parser.add_argument("--backend", default="PIL", type=str.lower, help="PIL or tensor - case insensitive")
 
     return parser
 
 
 def main(args):
-    if args.dataset not in ("coco", "coco_kp" "cvat"):
-        raise ValueError(f"Dataset should be coco, coco_kp or cvat, got {args.dataset}")
+    if args.dataset not in ("coco", "cvat") and not args.dataset.startswith("coco_custom"):
+        raise ValueError(f"Dataset should be coco, coco_custom_* or cvat, got {args.dataset}")
 
     if args.output_dir:
         utils.mkdir(args.output_dir)
@@ -244,10 +253,18 @@ def main(args):
         model = get_custom_model(
             args.model, weights=args.weights, weights_backbone=args.weights_backbone, num_classes=num_classes, **kwargs
         )
-    else:
+    elif args.weights is None:
         model = torchvision.models.get_model(
-            args.model, weights=args.weights, weights_backbone=args.weights_backbone, num_classes=num_classes, **kwargs
+            args.model, num_classes=num_classes, weights=args.weights, weights_backbone=args.weights_backbone, **kwargs
         )
+    elif args.model == "fasterrcnn_resnet50_fpn":
+        model = torchvision.models.get_model(
+            args.model, weights=args.weights, weights_backbone=args.weights_backbone, **kwargs
+        )
+        in_features = model.roi_heads.box_predictor.cls_score.in_features
+        model.roi_heads.box_predictor = torchvision.models.detection.faster_rcnn.FastRCNNPredictor(in_features, num_classes)
+    else:
+        raise ValueError("")
     model.to(device)
     if args.distributed and args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -325,7 +342,8 @@ def main(args):
             utils.save_on_master(checkpoint, os.path.join(args.output_dir, "checkpoint.pth"))
 
         # evaluate after every epoch
-        evaluate(model, data_loader_test, device=device)
+        if (epoch + 1) % args.eval_freq == 0 or epoch + 1 == args.epochs:    
+            evaluate(model, data_loader_test, device=device)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -334,4 +352,14 @@ def main(args):
 
 if __name__ == "__main__":
     args = get_args_parser().parse_args()
+    wandb.init(
+        project="bbox",
+        config={
+            "data": [args.dataset, args.data_path],
+            "cat_id_map": [args.cat_id_map],
+            "model": args.model,
+            "lr" :args.lr,
+            "augmentation": args.data_augmentation
+        }
+    )
     main(args)

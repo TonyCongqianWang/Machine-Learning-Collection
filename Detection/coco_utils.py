@@ -1,11 +1,12 @@
-import os
+import os, json
 
 import torch
 import torch.utils.data
 import torchvision
+import torchvision.transforms.v2 as T
+
 from pycocotools import mask as coco_mask
 from pycocotools.coco import COCO
-
 
 def convert_coco_poly_to_mask(segmentations, height, width):
     masks = []
@@ -86,8 +87,6 @@ def _coco_remove_images_without_annotations(dataset, cat_list=None):
     def _count_visible_keypoints(anno):
         return sum(sum(1 for v in ann["keypoints"][2::3] if v > 0) for ann in anno)
 
-    min_keypoints_per_image = 10
-
     def _has_valid_annotation(anno):
         # if it's empty, there is no annotation
         if len(anno) == 0:
@@ -95,15 +94,7 @@ def _coco_remove_images_without_annotations(dataset, cat_list=None):
         # if all boxes have close to zero area, there is no annotation
         if _has_only_empty_bbox(anno):
             return False
-        # keypoints task have a slight different criteria for considering
-        # if an annotation is valid
-        if "keypoints" not in anno[0]:
-            return True
-        # for keypoint detection tasks, only consider valid images those
-        # containing at least min_keypoints_per_image
-        if _count_visible_keypoints(anno) >= min_keypoints_per_image:
-            return True
-        return False
+        return True
 
     ids = []
     for ds_idx, img_id in enumerate(dataset.ids):
@@ -174,13 +165,36 @@ def get_coco_api_from_dataset(dataset):
     # FIXME: This is... awful?
     for _ in range(10):
         if isinstance(dataset, torchvision.datasets.CocoDetection):
-            break
-        if isinstance(dataset, torch.utils.data.Subset):
+            return dataset.coco
+        elif isinstance(dataset, torch.utils.data.Subset):
             dataset = dataset.dataset
-    if isinstance(dataset, torchvision.datasets.CocoDetection):
-        return dataset.coco
+        else:
+            break        
     return convert_to_coco_api(dataset)
 
+
+class TransformCategoryMapWrapper:
+    def __init__(self, map_dictionary, transforms):
+        if not isinstance(map_dictionary, dict):
+            raise ValueError(f"CategoryMapTransform needs dictionary as argument")
+        self.map_dictionary = map_dictionary
+        self.transforms = transforms
+
+    def __call__(self, img, target):
+        img, target = self.transforms(img, target)
+        if "labels" not in target.keys() and "boxes" not in target.keys():
+            return img, target
+        elif len(target["labels"]) != len(target["boxes"]):
+            l1, l2 = len(target["labels"]), len(target["boxes"])
+            raise ValueError(f"Mismatch of boxes and labels length: {l1} != {l2}")
+        elif len(self.map_dictionary) == 0:
+            for idx in range(len(target["labels"])):
+                target["labels"][idx] = 1
+        else:
+            for idx in range(len(target["labels"])):
+                target["labels"][idx] = int(self.map_dictionary[str(target["labels"][idx])])
+        return img, target
+    
 
 class CocoDetection(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, transforms):
@@ -195,14 +209,13 @@ class CocoDetection(torchvision.datasets.CocoDetection):
             img, target = self._transforms(img, target)
         return img, target
 
-
-def get_coco(root, image_set, transforms, mode="instances", with_masks=False):
-    if mode == "custom":
+def get_coco(root, image_set, transforms, mode, cat_id_map, with_masks=False):
+    if mode.split("_")[0] == "custom":
         anno_file_template = "{}_{}.json"
-
+        mode = "_".join(mode.split("_")[1:])
         PATHS = {
-            "train": ("train", os.path.join("annotations", anno_file_template.format(mode, "train"))),
-            "val": ("val", os.path.join("annotations", anno_file_template.format(mode, "val"))),
+            "train": ("images", os.path.join("annotations", anno_file_template.format(mode, "Train"))),
+            "val": ("images", os.path.join("annotations", anno_file_template.format(mode, "Validation"))),
         }
     else:
         anno_file_template = "{}_{}2017.json"
@@ -211,6 +224,10 @@ def get_coco(root, image_set, transforms, mode="instances", with_masks=False):
             "val": ("val2017", os.path.join("annotations", anno_file_template.format(mode, "val"))),
             # "train": ("val2017", os.path.join("annotations", anno_file_template.format(mode, "val")))
         }
+        
+    if cat_id_map is not None:
+        cat_id_map = json.loads(cat_id_map)
+        transforms = TransformCategoryMapWrapper(cat_id_map, transforms)
 
     img_folder, ann_file = PATHS[image_set]
     img_folder = os.path.join(root, img_folder)
@@ -222,13 +239,12 @@ def get_coco(root, image_set, transforms, mode="instances", with_masks=False):
     target_keys = ["boxes", "labels", "image_id"]
     if with_masks:
         target_keys += ["masks"]
+
     dataset = wrap_dataset_for_transforms_v2(dataset, target_keys=target_keys)
 
-    dataset = CocoDetection(img_folder, ann_file, transforms=transforms)
-
+    original_size = len(dataset)
     if image_set == "train":
         dataset = _coco_remove_images_without_annotations(dataset)
-
+    print("Removed", original_size - len(dataset), "of", original_size,"images with no annotations")
     # dataset = torch.utils.data.Subset(dataset, [i for i in range(500)])
-
     return dataset

@@ -1,6 +1,7 @@
 import math
 import sys
 import time
+import wandb
 
 import torch
 import torchvision.models.detection.mask_rcnn
@@ -23,7 +24,9 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, sc
         lr_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer, start_factor=warmup_factor, total_iters=warmup_iters
         )
-
+        
+    running_loss, num_steps = (0, 0)
+    
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
@@ -36,12 +39,14 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, sc
         losses_reduced = sum(loss for loss in loss_dict_reduced.values())
 
         loss_value = losses_reduced.item()
-
+        running_loss += loss_value
+        num_steps += 1
+        
         if not math.isfinite(loss_value):
             print(f"Loss is {loss_value}, stopping training")
             print(loss_dict_reduced)
             sys.exit(1)
-
+           
         optimizer.zero_grad()
         if scaler is not None:
             scaler.scale(losses).backward()
@@ -56,7 +61,7 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, sc
 
         metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-
+    wandb.log({"train loss": running_loss/num_steps})
     return metric_logger
 
 
@@ -86,6 +91,8 @@ def evaluate(model, data_loader, device):
     iou_types = _get_iou_types(model)
     coco_evaluator = CocoEvaluator(coco, iou_types)
 
+    running_loss, num_steps = (0, 0)
+
     for images, targets in metric_logger.log_every(data_loader, 100, header):
         images = list(img.to(device) for img in images)
 
@@ -96,6 +103,21 @@ def evaluate(model, data_loader, device):
 
         outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
         model_time = time.time() - model_time
+        
+        loss_targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
+        valid_loss_images, valid_loss_targets = [], []
+        for i, t in zip(images, loss_targets):
+            if "boxes" in t.keys() and len(t["boxes"]) > 0:
+                valid_loss_images.append(i)
+                valid_loss_targets.append(t)
+        if len(valid_loss_images) > 0:
+            model.train()
+            loss_dict = model(valid_loss_images, valid_loss_targets)
+            losses = sum(loss for loss in loss_dict.values())
+            model.eval()
+            loss_value = losses.item()
+            running_loss += loss_value
+            num_steps += 1
 
         res = {target["image_id"]: output for target, output in zip(targets, outputs)}
         evaluator_time = time.time()
@@ -106,6 +128,8 @@ def evaluate(model, data_loader, device):
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
+    wandb.log({"val loss": running_loss/num_steps})
+    # log validation loss ot wandb
     coco_evaluator.synchronize_between_processes()
 
     # accumulate predictions from all images

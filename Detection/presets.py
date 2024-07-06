@@ -1,15 +1,8 @@
 from collections import defaultdict
 
 import torch
-
-
-def get_modules():
-    # We need a protected import to avoid the V2 warning in case just V1 is used
-    import torchvision.transforms.v2
-    import torchvision.tv_tensors
-
-    return torchvision.transforms.v2, torchvision.tv_tensors
-
+import torchvision.transforms.v2 as T
+import torchvision.tv_tensors as tv_tensors
 
 
 class DetectionPresetTrain:
@@ -24,7 +17,6 @@ class DetectionPresetTrain:
         backend="pil",
         _=True,
     ):
-        T, tv_tensors = get_modules()
 
         transforms = []
         backend = backend.lower()
@@ -47,6 +39,7 @@ class DetectionPresetTrain:
             transforms += [
                 T.RandomPhotometricDistort(),
                 T.RandomZoomOut(fill=fill),
+                #T.Lambda(lambda y: print("DEBUG:", type(y))),
                 T.RandomIoUCrop(),
                 T.RandomHorizontalFlip(p=hflip_prob),
             ]
@@ -59,26 +52,31 @@ class DetectionPresetTrain:
             fill = defaultdict(lambda: mean, {tv_tensors.Mask: 0})
 
             transforms += [
+                T.Resize((400,600)),
                 T.RandomGrayscale(p=1),
-                T.RandomRotation(180),
+                T.RandomRotation(180, expand=True),
+                T.Resize((400,600)),
                 T.RandomChoice([
                     T.RandomPhotometricDistort(),
                     T.JPEG((50,100)),
-                ]),
+                ]), 
                 T.RandomApply([
+                    T.Resize((400,600)),
                     T.RandomChoice([
-                        T.RandomZoomOut(fill=fill),
-                        T.RandomAffine(0),
-                        T.RandomPerspective(),
+                        T.RandomPerspective(distortion_scale=0.1),
                     ]),                  
                 ], p=0.67),    
                 T.RandomApply([
-                      T.ElasticTransform(),                
-                ], p=0.2),      
+                    T.Pad(20),
+                    T.ElasticTransform(), 
+                    T.Resize((400,600)),
+                ], p=0.2),   
                 T.RandomApply([
+                    T.RandomZoomOut(fill=fill),
                     T.RandomIoUCrop(),
-                ], p=0.8),    
+                ], p=0.8),   
                 T.RandomHorizontalFlip(p=hflip_prob),
+                T.Resize((400,600)),
             ]
         else:
             raise ValueError(f'Unknown data augmentation policy "{data_augmentation}"')
@@ -101,7 +99,6 @@ class DetectionPresetTrain:
 
 class DetectionPresetEval:
     def __init__(self, backend="pil", _=True):
-        T, _ = get_modules()
         transforms = []
         backend = backend.lower()
         
