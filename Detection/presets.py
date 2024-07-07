@@ -54,18 +54,16 @@ class DetectionPresetTrain:
             transforms += [
                 T.Resize((400,600)),
                 T.RandomGrayscale(p=1),
-                T.RandomRotation(180, expand=True),
+                T.RandomRotation(15, expand=True),
                 T.Resize((400,600)),
                 T.RandomChoice([
                     T.RandomPhotometricDistort(),
                     T.JPEG((50,100)),
-                ]), 
+                ], p=[0.7,0.3]), 
                 T.RandomApply([
                     T.Resize((400,600)),
-                    T.RandomChoice([
-                        T.RandomPerspective(distortion_scale=0.1),
-                    ]),                  
-                ], p=0.67),    
+                    T.RandomPerspective(distortion_scale=0.1)             
+                ], p=0.2),    
                 T.RandomApply([
                     T.Pad(20),
                     T.ElasticTransform(), 
@@ -74,8 +72,11 @@ class DetectionPresetTrain:
                 T.RandomApply([
                     T.RandomZoomOut(fill=fill),
                     T.RandomIoUCrop(),
-                ], p=0.8),   
-                T.RandomHorizontalFlip(p=hflip_prob),
+                ], p=0.8),
+                T.RandomApply([
+                    T.RandomHorizontalFlip(p=1),
+                    T.RandomVerticalFlip(p=1),
+                ], p=0.5),
                 T.Resize((400,600)),
             ]
         else:

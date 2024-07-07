@@ -80,23 +80,34 @@ def log_validation_loss(model, data_loader, device):
     # log validation loss ot wandb
     running_loss, num_steps = (0, 0)
 
+    loss_images, loss_targets = [], []
     for images, targets in data_loader:
-        images = list(img.to(device) for img in images)
-        loss_targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
-        valid_loss_images, valid_loss_targets = [], []
-        for i, t in zip(images, loss_targets):
-            if "boxes" in t.keys() and len(t["boxes"]) > 0:
-                valid_loss_images.append(i)
-                valid_loss_targets.append(t)
-        if len(valid_loss_images) > 0:
+        loss_images += list(img.to(device) for img in images)
+        loss_targets += [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
+    valid_loss_images, valid_loss_targets = [], []
+    for i, t in zip(loss_images, loss_targets):
+        if "boxes" in t.keys() and len(t["boxes"]) > 0:
+            valid_loss_images.append(i)
+            valid_loss_targets.append(t)
+        if len(valid_loss_images) > 128:
             model.train()
             loss_dict = model(valid_loss_images, valid_loss_targets)
+            valid_loss_images, valid_loss_targets = [], []
             losses = sum(loss for loss in loss_dict.values())
             model.eval()
             loss_value = losses.item()
             running_loss += loss_value
             num_steps += 1
-    wandb.log({"val loss": running_loss/num_steps})
+    if len(valid_loss_images) > 2:
+        model.train()
+        loss_dict = model(valid_loss_images, valid_loss_targets)
+        valid_loss_images, valid_loss_targets = [], []
+        losses = sum(loss for loss in loss_dict.values())
+        model.eval()
+        loss_value = losses.item()
+        running_loss += loss_value
+        num_steps += 1
+    wandb.log({"val loss": loss_value})
 
 @torch.inference_mode()
 def evaluate(model, data_loader, device):

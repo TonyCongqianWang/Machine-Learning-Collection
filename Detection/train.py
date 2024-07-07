@@ -249,9 +249,6 @@ def main(args):
     data_loader_test = torch.utils.data.DataLoader(
         dataset_test, batch_size=1, sampler=test_sampler, num_workers=args.workers, collate_fn=utils.collate_fn
     )
-    data_loader_test2 = torch.utils.data.DataLoader(
-        dataset_test, batch_size=2, collate_fn=utils.collate_fn
-    )
 
     print("Creating model")
     kwargs = {"trainable_backbone_layers": args.trainable_backbone_layers}
@@ -350,6 +347,9 @@ def main(args):
         train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq, scaler)
         lr_scheduler.step()
         
+        # log validation loss every epoch
+        log_validation_loss(model, data_loader_test, device=device)
+
         if args.output_dir:
             checkpoint = {
                 "model": model_without_ddp.state_dict(),
@@ -365,7 +365,6 @@ def main(args):
         if (epoch + 1) % args.eval_freq == 0 or epoch + 1 == args.epochs:    
             if args.output_dir:
                 utils.save_on_master(checkpoint, os.path.join(args.output_dir, f"model_{epoch}.pth"))
-            log_validation_loss(model, data_loader_test2, device=device)
             evaluate(model, data_loader_test, device=device)
 
     total_time = time.time() - start_time
