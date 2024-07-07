@@ -39,12 +39,12 @@ def train_one_epoch(loader, model, optimizer, loss_fn, device):
 def main():
     
     parser = argparse.ArgumentParser(
-    description='convert image dataset to csv format')
+    description='run keypoints training')
 
     parser.add_argument("dataset", type=str,
                     help='name of dataset located in data/')
     parser.add_argument("--resume", default=True,
-                    help='name of dataset located in data/')
+                    help='resume from checkpoint if existing. True/False. Default True')
     args = parser.parse_args()
     
     CHECKPOINT_FILE = f"models/checkpoints/checkpoint_{args.dataset}.pth.tar"

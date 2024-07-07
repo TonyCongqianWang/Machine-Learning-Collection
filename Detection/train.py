@@ -106,16 +106,16 @@ def get_args_parser(add_help=True):
     parser.add_argument("--model", default="fasterrcnn_resnet50_fpn", type=str, help="model name")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
     parser.add_argument(
-        "-b", "--batch-size", default=2, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
+        "-b", "--batch-size", default=10, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
     )
-    parser.add_argument("--epochs", default=50, type=int, metavar="N", help="number of total epochs to run")
+    parser.add_argument("--epochs", default=80, type=int, metavar="N", help="number of total epochs to run")
     parser.add_argument(
         "-j", "--workers", default=4, type=int, metavar="N", help="number of data loading workers (default: 4)"
     )
     parser.add_argument("--opt", default="sgd", type=str, help="optimizer")
     parser.add_argument(
         "--lr",
-        default=0.002,
+        default=0.005,
         type=float,
         help="initial learning rate, 0.02 is the default value for training on 8 gpus and 2 images_per_gpu",
     )
@@ -140,7 +140,7 @@ def get_args_parser(add_help=True):
     )
     parser.add_argument(
         "--lr-steps",
-        default=[30, 40],
+        default=[50, 70],
         nargs="+",
         type=int,
         help="decrease lr every step-size epochs (multisteplr scheduler only)",
@@ -150,7 +150,7 @@ def get_args_parser(add_help=True):
     )
     parser.add_argument("--print-freq", default=100, type=int, help="print frequency")
     parser.add_argument("--eval-freq", default=5, type=int, help="eval frequency")
-    parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
+    parser.add_argument("--output-dir", default="./model_checkpoints", type=str, help="path to save outputs")
     parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
     parser.add_argument("--start_epoch", default=0, type=int, help="start epoch")
     parser.add_argument("--aspect-ratio-group-factor", default=3, type=int)
@@ -328,21 +328,21 @@ def main(args):
             train_sampler.set_epoch(epoch)
         train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq, scaler)
         lr_scheduler.step()
-        if args.output_dir:
-            checkpoint = {
-                "model": model_without_ddp.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "lr_scheduler": lr_scheduler.state_dict(),
-                "args": args,
-                "epoch": epoch,
-            }
-            if args.amp:
-                checkpoint["scaler"] = scaler.state_dict()
-            utils.save_on_master(checkpoint, os.path.join(args.output_dir, f"model_{epoch}.pth"))
-            utils.save_on_master(checkpoint, os.path.join(args.output_dir, "checkpoint.pth"))
 
-        # evaluate after every epoch
+        utils.save_on_master(checkpoint, os.path.join(args.output_dir, "checkpoint.pth"))
+        # evaluate every epoch eval_freq epochs
         if (epoch + 1) % args.eval_freq == 0 or epoch + 1 == args.epochs:    
+            if args.output_dir:
+                checkpoint = {
+                    "model": model_without_ddp.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "lr_scheduler": lr_scheduler.state_dict(),
+                    "args": args,
+                    "epoch": epoch,
+                }
+                if args.amp:
+                    checkpoint["scaler"] = scaler.state_dict()
+                utils.save_on_master(checkpoint, os.path.join(args.output_dir, f"model_{epoch}.pth"))
             evaluate(model, data_loader_test, device=device)
 
     total_time = time.time() - start_time

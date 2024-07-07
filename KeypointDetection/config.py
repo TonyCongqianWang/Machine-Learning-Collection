@@ -31,11 +31,16 @@ train_transforms = A.Compose(
             A.Blur(p=0.8),
         ], p=0.2),
         A.ShiftScaleRotate(shift_limit=(-0.1, 0.1), scale_limit=(-0.1, 0.1), rotate_limit=0, p=0.2, border_mode=cv2.BORDER_CONSTANT),
+        A.Compose([
+            A.HorizontalFlip(p=1),
+            A.VerticalFlip(p=1),
+        ], p=0.5),
         A.Normalize(
             mean=[0.4897, 0.4897, 0.4897],
             std=[0.2330, 0.2330, 0.2330],
             max_pixel_value=255.0,
         ),
+        A.Resize(width=84, height=96),
         ToTensorV2(),
     ], keypoint_params=A.KeypointParams(format="xy", remove_invisible=False),
 )
