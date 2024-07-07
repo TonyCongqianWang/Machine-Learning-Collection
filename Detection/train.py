@@ -14,6 +14,14 @@ Also, if you train Keypoint R-CNN, the default hyperparameters are
     --epochs 46 --lr-steps 36 43 --aspect-ratio-group-factor 3
 Because the number of images is smaller in the person keypoint subset of COCO,
 the number of epochs should be adapted so that we have the same number of iterations.
+
+Available models:
+retinanet_resnet50_fpn_v2
+fasterrcnn_resnet50_fpn_v2
+fasterrcnn_mobilenet_v3_large_fpn
+ssd300_vgg16
+ssdlite320_mobilenet_v3_large 
+fcos_resnet50_fpn
 """
 from ast import arg
 import datetime
@@ -29,7 +37,7 @@ import torchvision.models.detection.mask_rcnn
 import utils, wandb
 from coco_utils import get_coco
 from cvat_utils import get_cvat
-from engine import evaluate, train_one_epoch
+from engine import evaluate, train_one_epoch, log_validation_loss
 from group_by_aspect_ratio import create_aspect_ratio_groups, GroupedBatchSampler
 
 
@@ -103,7 +111,7 @@ def get_args_parser(add_help=True):
         type=str,
         help="dictionary mapping category_id to index. Must use double quotes for category_id. None for identity. Empty dict to map very category_id to 1",
     )
-    parser.add_argument("--model", default="fasterrcnn_resnet50_fpn", type=str, help="model name")
+    parser.add_argument("--model", default="fcos_resnet50_fpn", type=str, help="model name")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
     parser.add_argument(
         "-b", "--batch-size", default=10, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
@@ -115,7 +123,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--opt", default="sgd", type=str, help="optimizer")
     parser.add_argument(
         "--lr",
-        default=0.005,
+        default=0.002,
         type=float,
         help="initial learning rate, 0.02 is the default value for training on 8 gpus and 2 images_per_gpu",
     )
@@ -156,7 +164,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--aspect-ratio-group-factor", default=3, type=int)
     parser.add_argument("--rpn-score-thresh", default=None, type=float, help="rpn score threshold for faster-rcnn")
     parser.add_argument(
-        "--trainable-backbone-layers", default=None, type=int, help="number of trainable layers of backbone"
+        "--trainable-backbone-layers", default=0, type=int, help="number of trainable layers of backbone"
     )
     parser.add_argument(
         "--data-augmentation", default="ssd", type=str, help="data augmentation policy (default: ssd)"
@@ -186,7 +194,7 @@ def get_args_parser(add_help=True):
     # distributed training parameters
     parser.add_argument("--world-size", default=2, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
-    parser.add_argument("--weights", default="DEFAULT", type=str, help="the weights enum name to load")
+    parser.add_argument("--weights", default=None, type=str, help="the weights enum name to load")
     parser.add_argument("--weights-backbone", default="DEFAULT", type=str, help="the backbone weights enum name to load")
 
     # Mixed precision training parameters
@@ -241,6 +249,9 @@ def main(args):
     data_loader_test = torch.utils.data.DataLoader(
         dataset_test, batch_size=1, sampler=test_sampler, num_workers=args.workers, collate_fn=utils.collate_fn
     )
+    data_loader_test2 = torch.utils.data.DataLoader(
+        dataset_test, batch_size=2, collate_fn=utils.collate_fn
+    )
 
     print("Creating model")
     kwargs = {"trainable_backbone_layers": args.trainable_backbone_layers}
@@ -257,14 +268,24 @@ def main(args):
         model = torchvision.models.get_model(
             args.model, num_classes=num_classes, weights=args.weights, weights_backbone=args.weights_backbone, **kwargs
         )
-    elif args.model == "fasterrcnn_resnet50_fpn":
+    elif args.model in ["fasterrcnn_resnet50_fpn", "fasterrcnn_resnet50_fpn_v2", "fasterrcnn_mobilenet_v3_large_fpn", "fasterrcnn_mobilenet_v3_large_320_fpn"]:
         model = torchvision.models.get_model(
             args.model, weights=args.weights, weights_backbone=args.weights_backbone, **kwargs
         )
         in_features = model.roi_heads.box_predictor.cls_score.in_features
         model.roi_heads.box_predictor = torchvision.models.detection.faster_rcnn.FastRCNNPredictor(in_features, num_classes)
     else:
-        raise ValueError("")
+        model = torchvision.models.get_model(
+            args.model, num_classes=num_classes, weights=None, weights_backbone=args.weights_backbone, **kwargs
+        )        
+        mstate_dict = model.state_dict()
+        cstate_dict = torchvision.models.get_model_weights(args.model).DEFAULT.get_state_dict()
+        for k in mstate_dict.keys():
+            if mstate_dict[k].shape != cstate_dict[k].shape:
+                print('key {} will be removed, orishape: {}, training shape: {}'.format(k, cstate_dict[k].shape, mstate_dict[k].shape))
+                cstate_dict.pop(k)
+        model.load_state_dict(cstate_dict, strict=False)
+        
     model.to(device)
     if args.distributed and args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -328,21 +349,23 @@ def main(args):
             train_sampler.set_epoch(epoch)
         train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq, scaler)
         lr_scheduler.step()
-
-        utils.save_on_master(checkpoint, os.path.join(args.output_dir, "checkpoint.pth"))
+        
+        if args.output_dir:
+            checkpoint = {
+                "model": model_without_ddp.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "lr_scheduler": lr_scheduler.state_dict(),
+                "args": args,
+                "epoch": epoch,
+            }
+            if args.amp:
+                checkpoint["scaler"] = scaler.state_dict()
+            utils.save_on_master(checkpoint, os.path.join(args.output_dir, "checkpoint.pth"))
         # evaluate every epoch eval_freq epochs
         if (epoch + 1) % args.eval_freq == 0 or epoch + 1 == args.epochs:    
             if args.output_dir:
-                checkpoint = {
-                    "model": model_without_ddp.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "lr_scheduler": lr_scheduler.state_dict(),
-                    "args": args,
-                    "epoch": epoch,
-                }
-                if args.amp:
-                    checkpoint["scaler"] = scaler.state_dict()
                 utils.save_on_master(checkpoint, os.path.join(args.output_dir, f"model_{epoch}.pth"))
+            log_validation_loss(model, data_loader_test2, device=device)
             evaluate(model, data_loader_test, device=device)
 
     total_time = time.time() - start_time
@@ -359,6 +382,8 @@ if __name__ == "__main__":
             "cat_id_map": [args.cat_id_map],
             "model": args.model,
             "lr" :args.lr,
+            "pretrain weights (backbone, extra)": [args.weights_backbone, args.weights],
+            "trainable backbone layers": args.trainable_backbone_layers,
             "augmentation": args.data_augmentation
         }
     )
